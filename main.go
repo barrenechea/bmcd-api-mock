@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/rs/cors"
@@ -94,7 +95,10 @@ func handleSetRequest(w http.ResponseWriter, r *http.Request) interface{} {
 		handleSetPowerRequest(r)
 	case "node_info":
 		handleSetNodeInfoRequest(w, r)
+	case "reset":
+		handleSetResetNodeRequest(w, r)
 	}
+
 	return setResponse()
 }
 
@@ -130,6 +134,34 @@ func handleSetPowerRequest(r *http.Request) {
 				powerState[internalNodeKey].PowerState = &value
 			}
 		}
+	}
+}
+
+func handleSetResetNodeRequest(w http.ResponseWriter, r *http.Request) {
+	nodeStr := r.URL.Query().Get("node")
+	if nodeStr == "" {
+		// Return an error response if the "node" parameter is missing
+		http.Error(w, "Missing 'node' parameter", http.StatusBadRequest)
+		return
+	}
+
+	nodeNum, err := strconv.Atoi(nodeStr)
+	if err != nil {
+		// Return an error response if the "node" parameter is not a valid integer
+		http.Error(w, "Parameter 'node' is not a number", http.StatusBadRequest)
+		return
+	}
+
+	if nodeNum < 0 || nodeNum > 3 {
+		// Return an error response if the "node" parameter is out of range
+		http.Error(w, "Parameter 'node' is out of range 0..3 of node IDs", http.StatusBadRequest)
+		return
+	}
+
+	internalNodeKey := fmt.Sprintf("Node%d", nodeNum+1)
+	if node, exists := powerState[internalNodeKey]; exists {
+		value := int32(1)
+		node.PowerState = &value
 	}
 }
 
