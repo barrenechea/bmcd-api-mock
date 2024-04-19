@@ -157,6 +157,8 @@ func handleSetRequest(w http.ResponseWriter, r *http.Request) interface{} {
 		handleSetUSBModeRequest(w, r)
 	case "firmware":
 		handleSetFirmwareRequest(w, r)
+	case "flash":
+		handleSetNodeFlashRequest(w, r)
 	}
 
 	return setResponse()
@@ -178,6 +180,23 @@ func handleGetRequest(w http.ResponseWriter, r *http.Request) interface{} {
 		w.Write([]byte("hello world"))
 		return nil
 	}
+}
+
+func handleSetNodeFlashRequest(w http.ResponseWriter, r *http.Request) {
+	err := r.ParseMultipartForm(200 * 1024 * 1024) // 200 MB
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	log.Printf("Received flash file: %s", header.Filename)
 }
 
 func handleSetFirmwareRequest(w http.ResponseWriter, r *http.Request) {
