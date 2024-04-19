@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -40,12 +42,13 @@ var powerState = map[string]*NodeInfo{
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/bmc", handleBMCRequest)
+	mux.HandleFunc("/api/bmc/backup", handleBMCBackupRequest)
 
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
-		ExposedHeaders:   []string{"Link"},
+		ExposedHeaders:   []string{"Link", "Content-Disposition"},
 		AllowCredentials: true,
 		MaxAge:           corsMaxAge,
 	})
@@ -77,6 +80,15 @@ func respondWithJSON(w http.ResponseWriter, data interface{}) {
 	}
 }
 
+func handleBMCBackupRequest(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/bmc/backup" {
+		handleBackupRequest(w)
+		return
+	}
+
+	http.Error(w, "Not found", http.StatusNotFound)
+}
+
 func handleBMCRequest(w http.ResponseWriter, r *http.Request) {
 	var data interface{}
 
@@ -87,6 +99,44 @@ func handleBMCRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondWithJSON(w, data)
+}
+
+func handleBackupRequest(w http.ResponseWriter) {
+	currentTime := time.Now().Format("02-01-2006")
+	filename := fmt.Sprintf("tp2-backup-%s.tar.gz", currentTime)
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+
+	// Create a dummy txt file
+	dummyContent := []byte("This is a dummy backup file.")
+
+	// Create a new gzip writer
+	gzipWriter := gzip.NewWriter(w)
+	defer gzipWriter.Close()
+
+	// Create a new tar writer
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
+
+	// Create a new file header
+	header := &tar.Header{
+		Name: "dummy.txt",
+		Mode: 0600,
+		Size: int64(len(dummyContent)),
+	}
+
+	// Write the header to the tar archive
+	if err := tarWriter.WriteHeader(header); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Write the dummy file content to the tar archive
+	if _, err := tarWriter.Write(dummyContent); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func handleSetRequest(w http.ResponseWriter, r *http.Request) interface{} {
