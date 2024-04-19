@@ -39,6 +39,12 @@ var powerState = map[string]*NodeInfo{
 	"Node4": {},
 }
 
+var usbState = map[string]string{
+	"mode":  "Host",
+	"node":  "Node 1",
+	"route": "AlternativePort",
+}
+
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/bmc", handleBMCRequest)
@@ -147,6 +153,8 @@ func handleSetRequest(w http.ResponseWriter, r *http.Request) interface{} {
 		handleSetNodeInfoRequest(w, r)
 	case "reset":
 		handleSetResetNodeRequest(w, r)
+	case "usb":
+		handleSetUSBModeRequest(w, r)
 	}
 
 	return setResponse()
@@ -227,6 +235,41 @@ func handleSetNodeInfoRequest(w http.ResponseWriter, r *http.Request) {
 			node.ModuleName = info.ModuleName
 		}
 	}
+}
+
+func handleSetUSBModeRequest(w http.ResponseWriter, r *http.Request) {
+	modeStr := r.URL.Query().Get("mode")
+	nodeStr := r.URL.Query().Get("node")
+
+	if modeStr == "" || nodeStr == "" {
+		http.Error(w, "Missing 'mode' or 'node' parameter", http.StatusBadRequest)
+		return
+	}
+
+	mode, err := strconv.Atoi(modeStr)
+	if err != nil {
+		http.Error(w, "Parameter 'mode' is not a number", http.StatusBadRequest)
+		return
+	}
+
+	node, err := strconv.Atoi(nodeStr)
+	if err != nil {
+		http.Error(w, "Parameter 'node' is not a number", http.StatusBadRequest)
+		return
+	}
+
+	// Perform the necessary logic to set the USB mode based on the mode and node values
+	// Update the USB configuration based on the mode and node
+	// You can use the logic from the provided Rust code as a reference
+	// Update the USB mode and node information based on the incoming request
+	if mode == 0 {
+		usbState["mode"] = "Host"
+	} else if mode == 1 {
+		usbState["mode"] = "Device"
+	} else if mode == 2 {
+		usbState["mode"] = "Flash"
+	}
+	usbState["node"] = fmt.Sprintf("Node %d", node+1)
 }
 
 func setResponse() ResponseObject {
@@ -335,11 +378,7 @@ func getUSBInfoResponse() ResponseObject {
 	return ResponseObject{
 		Response: []ResponseResult{
 			{
-				Result: map[string]interface{}{
-					"mode":  "Device",
-					"node":  "Node 1",
-					"route": "AlternativePort",
-				},
+				Result: usbState,
 			},
 		},
 	}
