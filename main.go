@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rs/cors"
@@ -49,6 +51,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/bmc", handleBMCRequest)
 	mux.HandleFunc("/api/bmc/backup", handleBMCBackupRequest)
+	mux.HandleFunc("/api/bmc/upload/", handleUploadRequest)
 
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
@@ -104,7 +107,9 @@ func handleBMCRequest(w http.ResponseWriter, r *http.Request) {
 		data = handleGetRequest(w, r)
 	}
 
-	respondWithJSON(w, data)
+	if data != nil {
+		respondWithJSON(w, data)
+	}
 }
 
 func handleBackupRequest(w http.ResponseWriter) {
@@ -157,8 +162,10 @@ func handleSetRequest(w http.ResponseWriter, r *http.Request) interface{} {
 		handleSetUSBModeRequest(w, r)
 	case "firmware":
 		handleSetFirmwareRequest(w, r)
+		return nil
 	case "flash":
 		handleSetNodeFlashRequest(w, r)
+		return nil
 	}
 
 	return setResponse()
@@ -176,19 +183,62 @@ func handleGetRequest(w http.ResponseWriter, r *http.Request) interface{} {
 		return getNodeInfoResponse()
 	case "usb":
 		return getUSBInfoResponse()
+	case "firmware":
+		handleGetFirmwareState(w)
+		return nil
+	case "flash":
+		handleGetFlashState(w)
+		return nil
 	default:
 		w.Write([]byte("hello world"))
 		return nil
 	}
 }
 
-func handleSetNodeFlashRequest(w http.ResponseWriter, r *http.Request) {
-	err := r.ParseMultipartForm(200 * 1024 * 1024) // 200 MB
+type FlashState struct {
+	sync.Mutex
+	TransferState map[int64]TransferInfo
+}
+
+type TransferInfo struct {
+	ID           int64  `json:"id"`
+	ProcessName  string `json:"process_name"`
+	Size         int64  `json:"size"`
+	Cancelled    bool   `json:"cancelled"`
+	BytesWritten int64  `json:"bytes_written"`
+}
+
+var flashState = FlashState{
+	TransferState: make(map[int64]TransferInfo),
+}
+
+func handleUploadRequest(w http.ResponseWriter, r *http.Request) {
+	// Extract the handle from the URL
+	handleStr := filepath.Base(r.URL.Path)
+	log.Printf("Received upload request for handle: %s", handleStr)
+	handle, err := strconv.ParseInt(handleStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid handle", http.StatusBadRequest)
+		return
+	}
+
+	// Check if the transfer info exists
+	flashState.Lock()
+	transferInfo, exists := flashState.TransferState[handle]
+	flashState.Unlock()
+	if !exists {
+		http.Error(w, "Invalid handle", http.StatusBadRequest)
+		return
+	}
+
+	// Parse the multipart form
+	err = r.ParseMultipartForm(200 * 1024 * 1024) // max 200 MB
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	// Get the file from the form
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -196,24 +246,81 @@ func handleSetNodeFlashRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	log.Printf("Received flash file: %s", header.Filename)
+	// Update the transfer info
+	flashState.Lock()
+	transferInfo.Size = header.Size
+	transferInfo.BytesWritten = 0
+	flashState.TransferState[handle] = transferInfo
+	flashState.Unlock()
+
+	// Return a success response
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleSetNodeFlashRequest(w http.ResponseWriter, r *http.Request) {
+	node := r.URL.Query().Get("node")
+	filename := r.URL.Query().Get("file")
+	length := r.URL.Query().Get("length")
+	nodeInt, errNodeInt := strconv.ParseInt(node, 10, 64)
+	lengthInt, errLengthInt := strconv.ParseInt(length, 10, 64)
+
+	if node == "" || filename == "" || length == "" || errNodeInt != nil || errLengthInt != nil {
+		respondWithJSON(w, map[string]string{
+			"error": "missing parameters",
+		})
+		return
+	}
+
+	// Generate a unique handle for the transfer
+	handle := time.Now().UnixNano()
+
+	// Create a new transfer info entry
+	flashState.Lock()
+	flashState.TransferState[handle] = TransferInfo{
+		ID:           handle,
+		ProcessName:  fmt.Sprintf("Node %s os install service", strconv.FormatInt(nodeInt+1, 10)),
+		Size:         lengthInt,
+		Cancelled:    false,
+		BytesWritten: 0,
+	}
+	flashState.Unlock()
+
+	// Return the handle as the response
+	respondWithJSON(w, map[string]int64{
+		"handle": handle,
+	})
 }
 
 func handleSetFirmwareRequest(w http.ResponseWriter, r *http.Request) {
-	err := r.ParseMultipartForm(200 * 1024 * 1024) // 200 MB
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	filename := r.URL.Query().Get("file")
+	length := r.URL.Query().Get("length")
+	lengthInt, err := strconv.ParseInt(length, 10, 64)
+
+	if filename == "" || length == "" || err != nil {
+		respondWithJSON(w, map[string]string{
+			"error": "missing parameters",
+		})
 		return
 	}
 
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
+	// Generate a unique handle for the transfer
+	handle := time.Now().UnixNano()
 
-	log.Printf("Received firmware file: %s", header.Filename)
+	// Create a new transfer info entry
+	flashState.Lock()
+	flashState.TransferState[handle] = TransferInfo{
+		ID:           handle,
+		ProcessName:  "firmware upgrade service",
+		Size:         lengthInt,
+		Cancelled:    false,
+		BytesWritten: 0,
+	}
+	flashState.Unlock()
+
+	// Return the handle as the response
+	respondWithJSON(w, map[string]int64{
+		"handle": handle,
+	})
 }
 
 func handleSetPowerRequest(r *http.Request) {
@@ -318,6 +425,134 @@ func setResponse() ResponseObject {
 			},
 		},
 	}
+}
+
+func handleGetFlashState(w http.ResponseWriter) {
+	flashState.Lock()
+	defer flashState.Unlock()
+
+	var response interface{}
+
+	if len(flashState.TransferState) > 0 {
+		// If there is an active transfer, send the transfer info
+		var transferInfo TransferInfo
+		var completedHandle int64
+
+		for handle, info := range flashState.TransferState {
+			if !info.Cancelled {
+				// Autoincrement BytesWritten by adding Size
+				info.BytesWritten += info.Size
+				flashState.TransferState[handle] = info
+
+				if info.BytesWritten >= info.Size*10 {
+					// If BytesWritten reaches 10 times the Size, mark the handle as completed
+					completedHandle = handle
+					transferInfo = info
+					break
+				} else {
+					transferInfo = info
+					break
+				}
+			}
+		}
+
+		if completedHandle != 0 {
+			log.Printf("Completed transfer with handle: %d", completedHandle)
+			// If there is a completed transfer, send the "Done" response
+			response = map[string]interface{}{
+				"Done": []interface{}{
+					map[string]int64{
+						"secs":  10,
+						"nanos": 100000000,
+					},
+					transferInfo.Size,
+				},
+			}
+			delete(flashState.TransferState, completedHandle)
+		} else {
+			// If there is an active transfer, send the "Transferring" response
+			response = map[string]interface{}{
+				"Transferring": transferInfo,
+			}
+		}
+	} else {
+		// If there are no active transfers, send the "Done" response
+		response = map[string]interface{}{
+			"Done": []interface{}{
+				map[string]int64{
+					"secs":  0,
+					"nanos": 0,
+				},
+				0,
+			},
+		}
+	}
+
+	respondWithJSON(w, response)
+}
+
+func handleGetFirmwareState(w http.ResponseWriter) {
+	flashState.Lock()
+	defer flashState.Unlock()
+
+	var response interface{}
+
+	if len(flashState.TransferState) > 0 {
+		// If there is an active transfer, send the transfer info
+		var transferInfo TransferInfo
+		var completedHandle int64
+
+		for handle, info := range flashState.TransferState {
+			if !info.Cancelled {
+				// Autoincrement BytesWritten by adding Size
+				info.BytesWritten += info.Size
+				flashState.TransferState[handle] = info
+
+				if info.BytesWritten >= info.Size*10 {
+					// If BytesWritten reaches 10 times the Size, mark the handle as completed
+					completedHandle = handle
+					transferInfo = info
+					break
+				} else {
+					transferInfo = info
+					break
+				}
+			}
+		}
+
+		if completedHandle != 0 {
+			log.Printf("Completed firmware upgrade with handle: %d", completedHandle)
+			// If there is a completed transfer, send the "Done" response
+			response = map[string]interface{}{
+				"Done": []interface{}{
+					map[string]int64{
+						"secs":  28,
+						"nanos": 10101682,
+					},
+					transferInfo.Size,
+				},
+			}
+			delete(flashState.TransferState, completedHandle)
+		} else {
+			// If there is an active transfer, send the "Transferring" response
+			response = map[string]interface{}{
+				"Transferring": transferInfo,
+			}
+		}
+	} else {
+		// If there are no active transfers, send the "Done" response
+		response = map[string]interface{}{
+			"Done": []interface{}{
+				map[string]int64{
+					"secs":  0,
+					"nanos": 0,
+				},
+				0,
+			},
+		}
+	}
+
+	respondWithJSON(w, response)
 }
 
 func getInfoResponse() ResponseObject {
