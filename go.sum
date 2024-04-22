@@ -1,2 +1,4 @@
+github.com/jaswdr/faker/v2 v2.2.0 h1:e+ib/tgkAHtV2IfJd43cA80uGavbW0DKTAPQyBRPX9E=
+github.com/jaswdr/faker/v2 v2.2.0/go.mod h1:ROK8xwQV0hYOLDUtxCQgHGcl10jbVzIvqHxcIDdwY2Q=
 github.com/rs/cors v1.10.1 h1:L0uuZVXIKlI1SShY2nhFfo44TYvDPQ1w4oFkUJNfhyo=
 github.com/rs/cors v1.10.1/go.mod h1:XyqrcTp5zjWr1wsJ8PIRZssZ8b/WMcMf71DJnit4EMU=

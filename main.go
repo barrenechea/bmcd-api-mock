@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/jaswdr/faker/v2"
 	"github.com/rs/cors"
 )
 
@@ -50,7 +52,18 @@ var usbState = map[string]string{
 	"route": "AlternativePort",
 }
 
+var networkState = map[string]string{
+	"mac": "",
+	"ip":  "",
+}
+
 func main() {
+	// Generate initial state for MAC Address and IP Address
+	faker := faker.New()
+	networkState["mac"] = strings.ToLower(faker.Internet().MacAddress())
+	networkState["ip"] = faker.Internet().LocalIpv4()
+
+	// Start the server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/bmc", handleBMCRequest)
 	mux.HandleFunc("/api/bmc/backup", handleBMCBackupRequest)
@@ -163,6 +176,8 @@ func handleSetRequest(w http.ResponseWriter, r *http.Request) interface{} {
 		handleSetResetNodeRequest(w, r)
 	case "usb":
 		handleSetUSBModeRequest(w, r)
+	case "network":
+		handleResetNetworkState()
 	case "firmware":
 		handleSetFirmwareRequest(w, r)
 		return nil
@@ -196,6 +211,12 @@ func handleGetRequest(w http.ResponseWriter, r *http.Request) interface{} {
 		w.Write([]byte("hello world"))
 		return nil
 	}
+}
+
+func handleResetNetworkState() {
+	faker := faker.New()
+	networkState["mac"] = strings.ToLower(faker.Internet().MacAddress())
+	networkState["ip"] = faker.Internet().LocalIpv4()
 }
 
 type FlashState struct {
@@ -609,8 +630,8 @@ func getInfoResponse() ResponseObject {
 					"ip": []map[string]string{
 						{
 							"device": "eth0",
-							"ip":     "10.0.0.100",
-							"mac":    "12:34:56:78:9a:bc\n", // why does it come with a newline from the server?
+							"ip":     networkState["ip"],
+							"mac":    networkState["mac"],
 						},
 					},
 					"storage": []map[string]interface{}{
