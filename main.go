@@ -3,8 +3,11 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -201,11 +204,13 @@ type FlashState struct {
 }
 
 type TransferInfo struct {
-	ID           int64  `json:"id"`
-	ProcessName  string `json:"process_name"`
-	Size         int64  `json:"size"`
-	Cancelled    bool   `json:"cancelled"`
-	BytesWritten int64  `json:"bytes_written"`
+	ID               int64  `json:"id"`
+	ProcessName      string `json:"process_name"`
+	Size             int64  `json:"size"`
+	Cancelled        bool   `json:"cancelled"`
+	BytesWritten     int64  `json:"bytes_written"`
+	calculatedSha256 string
+	expectedSha256   string
 }
 
 var flashState = FlashState{
@@ -246,10 +251,18 @@ func handleUploadRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sha256Checksum := hex.EncodeToString(hash.Sum(nil))
+
 	// Update the transfer info
 	flashState.Lock()
 	transferInfo.Size = header.Size
 	transferInfo.BytesWritten = 0
+	transferInfo.calculatedSha256 = sha256Checksum
 	flashState.TransferState[handle] = transferInfo
 	flashState.Unlock()
 
@@ -261,6 +274,7 @@ func handleSetNodeFlashRequest(w http.ResponseWriter, r *http.Request) {
 	node := r.URL.Query().Get("node")
 	filename := r.URL.Query().Get("file")
 	length := r.URL.Query().Get("length")
+	sha256 := r.URL.Query().Get("sha256") // optional
 	nodeInt, errNodeInt := strconv.ParseInt(node, 10, 64)
 	lengthInt, errLengthInt := strconv.ParseInt(length, 10, 64)
 
@@ -274,14 +288,23 @@ func handleSetNodeFlashRequest(w http.ResponseWriter, r *http.Request) {
 	// Generate a unique handle for the transfer
 	handle := time.Now().UnixNano()
 
+	// Clean up previous handles for the same node
+	nodeKey := fmt.Sprintf("Node %s", strconv.FormatInt(nodeInt+1, 10))
+	for handle, info := range flashState.TransferState {
+		if info.ProcessName == nodeKey+" os install service" {
+			delete(flashState.TransferState, handle)
+		}
+	}
+
 	// Create a new transfer info entry
 	flashState.Lock()
 	flashState.TransferState[handle] = TransferInfo{
-		ID:           handle,
-		ProcessName:  fmt.Sprintf("Node %s os install service", strconv.FormatInt(nodeInt+1, 10)),
-		Size:         lengthInt,
-		Cancelled:    false,
-		BytesWritten: 0,
+		ID:             handle,
+		ProcessName:    fmt.Sprintf("Node %s os install service", strconv.FormatInt(nodeInt+1, 10)),
+		Size:           lengthInt,
+		Cancelled:      false,
+		BytesWritten:   0,
+		expectedSha256: sha256,
 	}
 	flashState.Unlock()
 
@@ -294,6 +317,7 @@ func handleSetNodeFlashRequest(w http.ResponseWriter, r *http.Request) {
 func handleSetFirmwareRequest(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Query().Get("file")
 	length := r.URL.Query().Get("length")
+	sha256 := r.URL.Query().Get("sha256") // optional
 	lengthInt, err := strconv.ParseInt(length, 10, 64)
 
 	if filename == "" || length == "" || err != nil {
@@ -306,14 +330,22 @@ func handleSetFirmwareRequest(w http.ResponseWriter, r *http.Request) {
 	// Generate a unique handle for the transfer
 	handle := time.Now().UnixNano()
 
+	// Clean up previous handles for firmware upgrade
+	for handle, info := range flashState.TransferState {
+		if info.ProcessName == "firmware upgrade service" {
+			delete(flashState.TransferState, handle)
+		}
+	}
+
 	// Create a new transfer info entry
 	flashState.Lock()
 	flashState.TransferState[handle] = TransferInfo{
-		ID:           handle,
-		ProcessName:  "firmware upgrade service",
-		Size:         lengthInt,
-		Cancelled:    false,
-		BytesWritten: 0,
+		ID:             handle,
+		ProcessName:    "firmware upgrade service",
+		Size:           lengthInt,
+		Cancelled:      false,
+		BytesWritten:   0,
+		expectedSha256: sha256,
 	}
 	flashState.Unlock()
 
@@ -440,6 +472,13 @@ func handleGetFlashState(w http.ResponseWriter) {
 
 		for handle, info := range flashState.TransferState {
 			if !info.Cancelled {
+				if info.expectedSha256 != "" && info.expectedSha256 != info.calculatedSha256 {
+					response = map[string]string{
+						"Error": fmt.Sprintf("sha256 checksum failed. Expected: %s, got: %s", info.expectedSha256, info.calculatedSha256),
+					}
+					respondWithJSON(w, response)
+					return
+				}
 				// Autoincrement BytesWritten by adding Size
 				info.BytesWritten += info.Size
 				flashState.TransferState[handle] = info
@@ -504,6 +543,13 @@ func handleGetFirmwareState(w http.ResponseWriter) {
 
 		for handle, info := range flashState.TransferState {
 			if !info.Cancelled {
+				if info.expectedSha256 != "" && info.expectedSha256 != info.calculatedSha256 {
+					response = map[string]string{
+						"Error": fmt.Sprintf("sha256 checksum failed. Expected: %s, got: %s", info.expectedSha256, info.calculatedSha256),
+					}
+					respondWithJSON(w, response)
+					return
+				}
 				// Autoincrement BytesWritten by adding Size
 				info.BytesWritten += info.Size
 				flashState.TransferState[handle] = info
