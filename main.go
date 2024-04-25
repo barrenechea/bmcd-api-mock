@@ -57,6 +57,26 @@ var networkState = map[string]string{
 	"ip":  "",
 }
 
+func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sessionID := r.Header.Get("Authorization")
+		if sessionID == "" {
+			http.Error(w, "no authorization header provided", http.StatusUnauthorized)
+			return
+		}
+
+		sessionID = strings.TrimPrefix(sessionID, "Bearer ")
+
+		if _, exists := sessions[sessionID]; !exists {
+			// token 124124124 is not registered
+			http.Error(w, fmt.Sprintf("token %s is not registered", sessionID), http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	}
+}
+
 func main() {
 	// Generate initial state for MAC Address and IP Address
 	faker := faker.New()
@@ -65,9 +85,10 @@ func main() {
 
 	// Start the server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/bmc", handleBMCRequest)
-	mux.HandleFunc("/api/bmc/backup", handleBMCBackupRequest)
-	mux.HandleFunc("/api/bmc/upload/", handleUploadRequest)
+	mux.HandleFunc("/api/bmc/authenticate", handleAuthenticateRequest)
+	mux.HandleFunc("/api/bmc", authMiddleware(handleBMCRequest))
+	mux.HandleFunc("/api/bmc/backup", authMiddleware(handleBMCBackupRequest))
+	mux.HandleFunc("/api/bmc/upload/", authMiddleware(handleUploadRequest))
 
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
@@ -103,6 +124,49 @@ func respondWithJSON(w http.ResponseWriter, data interface{}) {
 		log.Printf("Error encoding response: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
 	}
+}
+
+var sessions = make(map[string]string)
+
+func handleAuthenticateRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var credentials struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&credentials)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if credentials.Username != "root" || credentials.Password != "turing" {
+		http.Error(w, "credentials incorrect", http.StatusForbidden)
+		return
+	}
+
+	sessionID := generateSessionID()
+	sessions[sessionID] = credentials.Username
+
+	response := map[string]string{
+		"id":          sessionID,
+		"name":        "User Session",
+		"description": "User Session",
+		"username":    credentials.Username,
+	}
+
+	respondWithJSON(w, response)
+}
+
+func generateSessionID() string {
+	// Generate a random session ID
+	// You can use a more secure method like UUID or a token library
+	return faker.New().RandomStringWithLength(64)
 }
 
 func handleBMCBackupRequest(w http.ResponseWriter, r *http.Request) {

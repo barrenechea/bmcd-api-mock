@@ -10,6 +10,7 @@ A mock of the exposed API from [bmcd](https://github.com/turing-machines/BMC-Fir
 
 The mock server simulates various API endpoints, including:
 
+- Authentication
 - Node power management
 - USB mode configuration
 - Firmware and flash state management
