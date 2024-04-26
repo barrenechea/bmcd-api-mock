@@ -57,6 +57,14 @@ var networkState = map[string]string{
 	"ip":  "",
 }
 
+var coolingState = map[string]map[string]interface{}{
+	"cooling_device0": {
+		"device":    "cooling_device0",
+		"speed":     0,
+		"max_speed": 10,
+	},
+}
+
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := r.Header.Get("Authorization")
@@ -242,6 +250,8 @@ func handleSetRequest(w http.ResponseWriter, r *http.Request) interface{} {
 		handleSetUSBModeRequest(w, r)
 	case "network":
 		handleResetNetworkState()
+	case "cooling":
+		handleSetCoolingInfoRequest(w, r)
 	case "firmware":
 		handleSetFirmwareRequest(w, r)
 		return nil
@@ -265,6 +275,8 @@ func handleGetRequest(w http.ResponseWriter, r *http.Request) interface{} {
 		return getNodeInfoResponse()
 	case "usb":
 		return getUSBInfoResponse()
+	case "cooling":
+		return getCoolingInfoResponse()
 	case "firmware":
 		handleGetFirmwareState(w)
 		return nil
@@ -281,6 +293,34 @@ func handleResetNetworkState() {
 	faker := faker.New()
 	networkState["mac"] = strings.ToLower(faker.Internet().MacAddress())
 	networkState["ip"] = faker.Internet().LocalIpv4()
+}
+
+func handleSetCoolingInfoRequest(w http.ResponseWriter, r *http.Request) {
+	deviceStr := r.URL.Query().Get("device")
+	speedStr := r.URL.Query().Get("speed")
+
+	if deviceStr == "" || speedStr == "" {
+		http.Error(w, "Missing 'device' or 'speed' parameter", http.StatusBadRequest)
+		return
+	}
+
+	speed, err := strconv.ParseUint(speedStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Parameter 'speed' must be a number", http.StatusBadRequest)
+		return
+	}
+
+	if device, ok := coolingState[deviceStr]; ok {
+		maxSpeed := device["max_speed"].(int)
+		if speed > uint64(maxSpeed) {
+			http.Error(w, fmt.Sprintf("Parameter 'speed' must be a number between 0-%d", maxSpeed), http.StatusBadRequest)
+			return
+		}
+		device["speed"] = speed
+	} else {
+		http.Error(w, "Device not found", http.StatusBadRequest)
+		return
+	}
 }
 
 type FlashState struct {
@@ -783,6 +823,20 @@ func getUSBInfoResponse() ResponseObject {
 		Response: []ResponseResult{
 			{
 				Result: usbState,
+			},
+		},
+	}
+}
+
+func getCoolingInfoResponse() ResponseObject {
+	var coolingInfo []map[string]interface{}
+	for _, info := range coolingState {
+		coolingInfo = append(coolingInfo, info)
+	}
+	return ResponseObject{
+		Response: []ResponseResult{
+			{
+				Result: coolingInfo,
 			},
 		},
 	}
