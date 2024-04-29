@@ -822,7 +822,9 @@ func getUSBInfoResponse() ResponseObject {
 	return ResponseObject{
 		Response: []ResponseResult{
 			{
-				Result: usbState,
+				Result: []map[string]string{
+					usbState,
+				},
 			},
 		},
 	}
