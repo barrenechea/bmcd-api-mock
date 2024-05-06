@@ -244,6 +244,7 @@ func handleSetRequest(w http.ResponseWriter, r *http.Request) interface{} {
 		handleSetPowerRequest(r)
 	case "node_info":
 		handleSetNodeInfoRequest(w, r)
+		return nil
 	case "reset":
 		handleSetResetNodeRequest(w, r)
 	case "usb":
@@ -537,6 +538,8 @@ func handleSetNodeInfoRequest(w http.ResponseWriter, r *http.Request) {
 			node.ModuleName = info.ModuleName
 		}
 	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func handleSetUSBModeRequest(w http.ResponseWriter, r *http.Request) {
