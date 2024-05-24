@@ -774,13 +774,14 @@ func getAboutResponse() ResponseObject {
 		Response: []ResponseResult{
 			{
 				Result: map[string]interface{}{
-					"model":         "Turing Pi 2 (v2.4)",
-					"hostname":      "turingpi\n", // why does it come with a newline from the server?
-					"api":           "1.1",
-					"version":       "2.0.5",
-					"buildtime":     "2024-04-16 13:30:00-00:00",
-					"buildroot":     "Buildroot 2024.02",
-					"build_version": "2024.02",
+					"board_model":    "Turing Pi 2",
+					"board_revision": "2.4",
+					"hostname":       "turingpi",
+					"api":            "1.1",
+					"version":        "2.0.5",
+					"buildtime":      "2024-04-16 13:30:00-00:00",
+					"buildroot":      "Buildroot 2024.02",
+					"build_version":  "2024.02",
 				},
 			},
 		},
